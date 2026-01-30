@@ -1,0 +1,14 @@
+# ThinkFlow - B2B AI Agent SaaS
+# Streamlit UI
+streamlit>=1.28.0
+
+# LangChain & Upstage (Document Parse, Solar Pro Chat)
+langchain>=0.1.0
+langchain-core>=0.2.0
+langchain-upstage>=0.0.5
+
+# Environment
+python-dotenv>=1.0.0
+
+# Calendar export
+ics>=0.7.2
