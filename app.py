@@ -17,6 +17,13 @@ logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").set
 from dotenv import load_dotenv  # type: ignore[reportMissingImports]
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
+# Streamlit Cloud: Secrets에 넣은 키를 환경 변수로 설정 (배포 시 .env는 없음)
+try:
+    if not os.environ.get("UPSTAGE_API_KEY") and "UPSTAGE_API_KEY" in st.secrets:
+        os.environ["UPSTAGE_API_KEY"] = str(st.secrets["UPSTAGE_API_KEY"]).strip()
+except Exception:
+    pass
+
 
 def check_api_key() -> bool:
     key = os.environ.get("UPSTAGE_API_KEY", "").strip()
