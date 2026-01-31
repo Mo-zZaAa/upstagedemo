@@ -123,5 +123,11 @@ ThinkFlow 초기 화면. 왼쪽 사이드바에 생각 덤핑·참고 자료 업
 
 ![ThinkFlow Empty State](docs/thinkflow-empty-state.png)
 
+다음과 같은 형식으로 계층적으로 내용의 위계를 정리해줍니다! 단순 요약과 다르게 어느쪽으로 더 많은 생각을 하고 있는지 알 수 있습니다.
+![03FFC749-DFBF-4614-8821-9C7EFB351D6A_1_201_a](https://github.com/user-attachments/assets/36bd0ce1-bfb5-4d67-80d7-aca58991fe2e)
+
+또 다음과 같은 형식으로 액션플랜이 만들어집니다. 일을 하기 전에 선행되어야할 것 등도 AI가 알아서 제안해주고, 누르면 추가해서 일을 무사히 수행할 수 있게 지원합니다. 본 일정은 수정 후 캘린더파일로 다운받아서 바로 캘린더 앱에 해당 파일을 불러오면 일정으로 소화할 수 있습니다!
+![03FFC749-DFBF-4614-8821-9C7EFB351D6A_1_201_a](https://github.com/user-attachments/assets/a9acf26d-c1be-44b1-9fff-5b905ac21a2d)
+
 ---
 
