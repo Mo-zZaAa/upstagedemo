@@ -11,7 +11,12 @@ from langchain_upstage import ChatUpstage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
-from utils.prompts import STRUCTURE_PROMPT, ACTION_PROMPT, EXECUTIVE_SUMMARY_PROMPT
+from utils.prompts import (
+    STRUCTURE_PROMPT,
+    ACTION_PROMPT,
+    EXECUTIVE_SUMMARY_PROMPT,
+    GAP_ANALYSIS_PROMPT,
+)
 from utils.helpers import clean_mermaid
 
 
@@ -41,18 +46,63 @@ class ThinkFlowAgent:
             | self.llm
             | StrOutputParser()
         )
+        self._gap_chain = (
+            {"context": RunnablePassthrough()}
+            | GAP_ANALYSIS_PROMPT
+            | self.llm
+            | StrOutputParser()
+        )
+
+    def check_gaps(self, context: str) -> dict[str, Any]:
+        """
+        Check if input has enough critical info (goal, deadline, assignee).
+        Returns: {"ready": bool, "missing": list[str]}.
+        """
+        if not (context and context.strip()):
+            return {"ready": False, "missing": ["목표", "마감일", "담당자"]}
+        try:
+            raw = self._gap_chain.invoke({"context": context.strip()})
+            return self._parse_gap(raw)
+        except Exception:
+            return {"ready": True, "missing": []}
+
+    def _parse_gap(self, raw: str) -> dict[str, Any]:
+        if not raw or not raw.strip():
+            return {"ready": True, "missing": []}
+        text = raw.strip()
+        code_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+        if code_match:
+            text = code_match.group(1).strip()
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return {"ready": True, "missing": []}
+        if not isinstance(data, dict):
+            return {"ready": True, "missing": []}
+        ready = data.get("ready", True)
+        missing = data.get("missing", [])
+        if not isinstance(missing, list):
+            missing = []
+        return {"ready": ready, "missing": missing}
 
     def analyze(self, context: str) -> dict[str, Any]:
         """
-        Run structure, action extraction, and executive summary on the given context.
+        Run gap check first. If info missing, return need_clarification.
+        Else run structure, action extraction, and executive summary.
 
         Returns:
-            {'mermaid': str, 'actions': list, 'executive_summary': dict}
-            - executive_summary: {title, summary, core_value, growth_driver}
-            - actions: list of {summary, due_date, priority, assignee}
+            Either { "need_clarification": True, "missing": [...] }
+            Or { "mermaid", "actions", "executive_summary" }
         """
         if not (context and context.strip()):
             return {"mermaid": "", "actions": [], "executive_summary": {}}
+
+        gap = self.check_gaps(context)
+        if not gap.get("ready", True):
+            return {
+                "need_clarification": True,
+                "missing": gap.get("missing", ["마감일", "담당자"]),
+            }
 
         # Executive summary
         try:
@@ -96,10 +146,10 @@ class ThinkFlowAgent:
         if not isinstance(data, dict):
             return {}
         return {
-            "title": str(data.get("title", "")).strip() or "전략 요약",
-            "summary": str(data.get("summary", "")).strip() or "",
-            "core_value": str(data.get("core_value", "")).strip() or "",
-            "growth_driver": str(data.get("growth_driver", "")).strip() or "",
+            "subject": str(data.get("subject", "")).strip() or str(data.get("title", "")).strip() or "전략 요약",
+            "overview": str(data.get("overview", "")).strip() or str(data.get("summary", "")).strip() or "",
+            "main_kpi": str(data.get("main_kpi", "")).strip() or str(data.get("core_value", "")).strip() or "",
+            "sub_metrics": str(data.get("sub_metrics", "")).strip() or str(data.get("growth_driver", "")).strip() or "",
         }
 
     def _safe_mermaid_output(self, raw: str) -> str:
@@ -107,17 +157,14 @@ class ThinkFlowAgent:
         cleaned = clean_mermaid(raw or "")
         if not cleaned.strip():
             return raw.strip() if raw else ""
-        # Basic sanity: should contain mindmap and root
-        if "mindmap" in cleaned and ("root" in cleaned or "Root" in cleaned or "목표" in cleaned):
+        if re.search(r"graph\s+(TD|LR|TB|RL)", cleaned, re.IGNORECASE) or "mindmap" in cleaned:
             return cleaned
-        # Otherwise return raw so UI can show something
         return raw.strip() if raw else cleaned
 
     def _parse_actions(self, raw: str) -> list[dict[str, Any]]:
         """Parse JSON array from LLM output. Return empty list on failure."""
         if not raw or not raw.strip():
             return []
-        # Strip markdown code fence if present
         text = raw.strip()
         code_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
         if code_match:
@@ -132,10 +179,22 @@ class ThinkFlowAgent:
         for item in data:
             if not isinstance(item, dict):
                 continue
+            level = item.get("level")
+            if level is None:
+                level = 1
+            try:
+                level = int(level) if level is not None else 1
+            except (ValueError, TypeError):
+                level = 1
+            level = 1 if level not in (1, 2) else level
+            dep = str(item.get("dependency", "")).strip() or ""
+            suggestion = str(item.get("ai_suggestion", "")).strip() or ""
             out.append({
                 "summary": str(item.get("summary", "")).strip() or "(제목 없음)",
                 "due_date": item.get("due_date"),
                 "priority": item.get("priority") or "Medium",
-                "assignee": str(item.get("assignee", "")).strip() or "-",
+                "level": level,
+                "dependency": dep,
+                "ai_suggestion": suggestion,
             })
         return out

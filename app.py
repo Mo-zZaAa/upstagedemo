@@ -1,7 +1,6 @@
 """
-ThinkFlow - Main Dashboard UI
-생각 덤핑 & 컨텍스트 → 구조화된 전략 맵 & 액션 플랜.
-Theme: 좌측 입력 / 우측 결과 (Executive Summary, Logic Tree, Action Plan, Gantt).
+ThinkFlow - Active Thinking Partner
+Context-Aware UX: Guidance Mode, Gap Analysis, Clean Design (no emojis).
 """
 
 import logging
@@ -17,91 +16,111 @@ logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").set
 from dotenv import load_dotenv  # type: ignore[reportMissingImports]
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-# Streamlit Cloud: Secrets에 넣은 키를 환경 변수로 설정 (배포 시 .env는 없음)
-try:
-    if not os.environ.get("UPSTAGE_API_KEY") and "UPSTAGE_API_KEY" in st.secrets:
-        os.environ["UPSTAGE_API_KEY"] = str(st.secrets["UPSTAGE_API_KEY"]).strip()
-except Exception:
-    pass
+def _inject_secrets_to_env():
+    if os.environ.get("UPSTAGE_API_KEY"):
+        return
+    try:
+        val = st.secrets["UPSTAGE_API_KEY"]
+    except (KeyError, TypeError, AttributeError):
+        val = getattr(st.secrets, "UPSTAGE_API_KEY", None)
+    if val:
+        os.environ["UPSTAGE_API_KEY"] = str(val).strip()
 
 
 def check_api_key() -> bool:
-    key = os.environ.get("UPSTAGE_API_KEY", "").strip()
-    return bool(key)
+    return bool(os.environ.get("UPSTAGE_API_KEY", "").strip())
 
 
-# ---- 스타일: 디자인 시안에 맞춘 라이트 그레이 + 퍼플 악센트 ----
+# ---- Clean design: mild colors, no emojis ----
 STYLES = """
 <style>
-  .stApp { background: #f5f5f7; }
-  [data-testid="stSidebar"] { background: #e8e8ed; }
-  [data-testid="stSidebar"] .stMarkdown { color: #1d1d1f; }
-  h1, h2, h3 { color: #1d1d1f !important; font-weight: 600 !important; }
-  .thinkflow-title { font-size: 1.25rem; font-weight: 700; color: #7c3aed; margin-bottom: 0; }
-  .char-count { font-size: 0.8rem; color: #6e6e73; margin-top: 4px; }
+  .stApp { background: #fafafb; }
+  [data-testid="stSidebar"] { background: #f0f0f3; }
+  [data-testid="stSidebar"] .stMarkdown { color: #374151; }
+  h1 { font-size: 1.75rem !important; color: #374151 !important; font-weight: 700 !important; font-family: -apple-system, BlinkMacSystemFont, sans-serif !important; }
+  h2 { font-size: 1.35rem !important; color: #374151 !important; font-weight: 600 !important; }
+  h3 { font-size: 1.15rem !important; color: #374151 !important; font-weight: 600 !important; }
+  .thinkflow-logo { font-size: 2rem; font-weight: 700; color: #8b7aa8; letter-spacing: -0.02em; font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin-bottom: 0; }
+  .thinkflow-logo-hero { font-size: 2.25rem; font-weight: 700; color: #8b7aa8; letter-spacing: -0.02em; font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin-bottom: 1rem; }
+  .char-count { font-size: 0.8rem; color: #6b7280; margin-top: 4px; }
   .card-box {
-    background: white;
+    background: #ffffff;
     border-radius: 12px;
     padding: 1rem 1.25rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
     margin-bottom: 1rem;
-    border: 1px solid #e5e5ea;
+    border: 1px solid #eaeaea;
   }
-  .card-value { font-weight: 600; color: #7c3aed; }
-  .card-label { font-size: 0.75rem; color: #6e6e73; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
-  .empty-card { background: #e8e8ed; color: #6e6e73; border: 1px dashed #c7c7cc; }
-  .section-title { font-size: 0.75rem; color: #7c3aed; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+  .card-value { font-weight: 600; color: #8b7aa8; }
+  .card-label { font-size: 0.75rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  .empty-card { background: #f0f0f3; color: #6b7280; border: 1px dashed #d1d5db; }
+  .section-title { font-size: 0.75rem; color: #8b7aa8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; font-weight: 600; }
   .stButton > button {
-    background: linear-gradient(90deg, #7c3aed, #a78bfa) !important;
+    background: linear-gradient(90deg, #9f8fbb, #b8a9c9) !important;
     color: white !important;
     border: none !important;
     border-radius: 8px !important;
     font-weight: 600 !important;
     width: 100%;
   }
-  .stButton > button:hover { opacity: 0.95; box-shadow: 0 2px 8px rgba(124,58,237,0.4); }
-  .success-box { background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 8px; padding: 0.75rem 1rem; margin: 0.5rem 0; }
-  .footer-text { font-size: 0.7rem; color: #8e8e93; margin-top: 2rem; }
-  div[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  .stButton > button:hover { opacity: 0.92; box-shadow: 0 2px 6px rgba(139,122,168,0.25); }
+  .success-box { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 0.75rem 1rem; margin: 0.5rem 0; }
+  .clarification-box { background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 1.25rem; margin: 1rem 0; }
+  .footer-text { font-size: 0.7rem; color: #9ca3af; margin-top: 2rem; }
+  .empty-hero { text-align: center; padding: 3rem 2rem; color: #374151; }
+  .empty-hero h2 { font-size: 1.25rem; font-weight: 600; color: #4b5563; margin-bottom: 0.5rem; }
+  .empty-hero p { color: #6b7280; font-size: 0.95rem; line-height: 1.65; max-width: 32rem; margin: 0 auto 2rem; }
+  .btn-hint { font-size: 0.8rem; color: #9ca3af; margin-top: 0.25rem; }
+  .refine-box { background: #f9fafb; border: 1px solid #eaeaea; border-radius: 12px; padding: 1rem 1.25rem; margin-top: 1rem; }
+  .refine-label { font-size: 0.8rem; color: #6b7280; margin-bottom: 0.5rem; }
+  div[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
 </style>
 """
 
 
 def main():
     st.set_page_config(
-        page_title="ThinkFlow",
-        page_icon="🧠",
+        page_title="ThinkFlow - Thinking Partner",
+        page_icon="",  # no emoji
         layout="wide",
         initial_sidebar_state="expanded",
     )
     st.markdown(STYLES, unsafe_allow_html=True)
+    _inject_secrets_to_env()
 
     if not check_api_key():
-        st.sidebar.error("`.env`에 `UPSTAGE_API_KEY`를 설정해 주세요.")
-        st.error("`.env`에 `UPSTAGE_API_KEY`가 설정되지 않았습니다. 프로젝트 루트의 `.env` 파일을 확인하세요.")
+        st.sidebar.error("UPSTAGE_API_KEY를 설정해 주세요.")
+        st.error(
+            "**UPSTAGE_API_KEY**가 설정되지 않았습니다.\n\n"
+            "- **로컬:** 프로젝트 루트의 `.env` 파일에 `UPSTAGE_API_KEY=키값` 추가\n"
+            "- **Streamlit Cloud:** 앱 Settings → Secrets에 `UPSTAGE_API_KEY = \"키\"` 추가 후 Save"
+        )
         st.stop()
 
-    # 세션에 결과 저장 (새로운 주제로 시작 시 초기화)
     if "thinkflow_result" not in st.session_state:
         st.session_state.thinkflow_result = None
+    if "thought_dump" not in st.session_state:
+        st.session_state.thought_dump = ""
+    if "last_context" not in st.session_state:
+        st.session_state.last_context = ""
 
-    # ----- 좌측 사이드바: 생각 덤핑 & 참고 자료 -----
+    # ----- Sidebar: Logo, Dumping Zone, File Upload -----
     with st.sidebar:
-        st.markdown('<p class="thinkflow-title">ThinkFlow</p>', unsafe_allow_html=True)
+        st.markdown('<p class="thinkflow-logo">ThinkFlow</p>', unsafe_allow_html=True)
         st.markdown("---")
-        st.markdown("**생각 덤핑 & 컨텍스트**")
+        st.markdown('<p style="font-size:0.9rem;font-weight:600;color:#4b5563;margin-bottom:0.25rem;">생각 덤핑 & 컨텍스트</p>', unsafe_allow_html=True)
 
         thought_input = st.text_area(
             "자유롭게 생각을 적어 보세요.",
-            placeholder="예: 2월 4일까지 기획안 내야 하는데 아직 타겟도 못 정함... 타겟 같은 거 필요하려나? 우리 팀원들은 다들 운동을 안 해서...",
             height=200,
             key="thought_dump",
             label_visibility="collapsed",
+            placeholder="여기에 어지러운 생각들을 자유롭게 적어주세요...",
         )
         n_char = len(thought_input or "")
         st.markdown(f'<p class="char-count">{n_char}자 작성됨</p>', unsafe_allow_html=True)
 
-        st.markdown("**참고 자료 (PDF, 이미지)**")
+        st.markdown('<p style="font-size:0.9rem;font-weight:600;color:#4b5563;margin:1rem 0 0.25rem;">참고 자료 (PDF, 이미지)</p>', unsafe_allow_html=True)
         uploaded_files = st.file_uploader(
             "PDF 또는 이미지 업로드",
             type=["pdf", "png", "jpg", "jpeg"],
@@ -110,21 +129,24 @@ def main():
             label_visibility="collapsed",
         )
 
+        has_input = bool((thought_input or "").strip()) or bool(uploaded_files)
         st.markdown("---")
-        run_clicked = st.button("✨ 생각 정리하기", type="primary", use_container_width=True)
+        run_clicked = st.button("생각 정리하기", type="primary", use_container_width=True, disabled=not has_input)
+        if not has_input:
+            st.markdown('<p class="btn-hint">내용을 입력하거나 참고 자료를 올리면 버튼이 활성화됩니다</p>', unsafe_allow_html=True)
 
-        if st.session_state.thinkflow_result is not None:
+        if st.session_state.thinkflow_result is not None and not st.session_state.thinkflow_result.get("need_clarification"):
             st.markdown("---")
-            st.markdown('<div class="success-box">✅ **분석 완료**<br/>입력된 내용을 바탕으로 전략 로드맵과 액션 아이템 생성이 완료되었습니다.</div>', unsafe_allow_html=True)
-            if st.button("🔄 새로운 주제로 시작", use_container_width=True):
+            st.markdown('<div class="success-box"><strong>분석 완료</strong><br/>전략 맵과 액션 플랜이 준비되었어요. 아래에서 보완할 내용을 추가할 수 있습니다.</div>', unsafe_allow_html=True)
+            if st.button("새로운 주제로 시작", use_container_width=True):
                 st.session_state.thinkflow_result = None
+                st.session_state.last_context = ""
                 st.rerun()
 
-        st.markdown('<p class="footer-text">Powered by ThinkFlow Intelligence Engine</p>', unsafe_allow_html=True)
+        st.markdown('<p class="footer-text">Powered by Upstage</p>', unsafe_allow_html=True)
 
-    # ----- 분석 실행 -----
+    # ----- Run analysis -----
     if run_clicked:
-        # 입력: 텍스트 + 파일에서 추출한 텍스트
         context_parts = []
         if (thought_input or "").strip():
             context_parts.append(thought_input.strip())
@@ -145,7 +167,7 @@ def main():
         combined_context = "\n\n".join(context_parts) if context_parts else ""
 
         if not combined_context:
-            st.sidebar.warning("생각을 적거나 참고 자료(PDF/이미지)를 업로드한 뒤 다시 시도해 주세요.")
+            st.sidebar.info("내용을 입력하거나 참고 자료를 올려 주세요.")
         else:
             with st.spinner("생각을 정리하고 있어요..."):
                 try:
@@ -153,70 +175,108 @@ def main():
                     from utils.helpers import generate_ics
                     agent = ThinkFlowAgent()
                     result = agent.analyze(combined_context)
-                    result["_ics_bytes"] = generate_ics(result.get("actions", []))
-                    st.session_state.thinkflow_result = result
-                    st.rerun()
-                except FileNotFoundError as e:
-                    st.sidebar.error(f"파일을 찾을 수 없습니다: {e}")
-                except ValueError as e:
-                    st.sidebar.error(f"처리 오류: {e}")
+                    if result.get("need_clarification"):
+                        st.session_state.thinkflow_result = result
+                        st.rerun()
+                    else:
+                        result["_ics_bytes"] = generate_ics(result.get("actions", []))
+                        st.session_state.thinkflow_result = result
+                        st.session_state.last_context = combined_context
+                        st.rerun()
                 except Exception as e:
-                    st.sidebar.error(f"오류가 발생했습니다: {e}")
+                    st.sidebar.error(f"오류: {e}")
 
-    # ----- 우측 메인: 빈 상태 vs 결과 -----
     result = st.session_state.thinkflow_result
 
+    # ----- Main: State 1 Empty -----
     if result is None:
-        # 빈 상태: 시작 안내 + STRUCTURE / EXECUTION 카드
-        st.markdown("## 생각 정리를 시작해보세요")
-        st.markdown("왼쪽 입력창에 아이디어를 덤핑하고 **생각 정리하기** 버튼을 누르면, 이곳에 구조화된 전략 맵과 상세 실행 계획이 생성됩니다.")
-        st.markdown("")
+        st.markdown(
+            '<div class="empty-hero">'
+            '<p class="thinkflow-logo-hero">ThinkFlow</p>'
+            '<h2>Thinking Partner</h2>'
+            '<p>복잡한 생각과 메모를 구체적인 실행 계획(Action Plan)으로 변환해 드립니다.</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown('<div class="card-box empty-card">**STRUCTURE**<br/>복잡한 생각을 논리 트리로 시각화</div>', unsafe_allow_html=True)
+            st.markdown('<div class="card-box empty-card"><strong>STRUCTURE</strong><br/>복잡한 생각을 논리 트리로 시각화</div>', unsafe_allow_html=True)
         with col2:
-            st.markdown('<div class="card-box empty-card">**EXECUTION**<br/>우선순위가 포함된 액션 아이템 생성</div>', unsafe_allow_html=True)
+            st.markdown('<div class="card-box empty-card"><strong>EXECUTION</strong><br/>우선순위가 포함된 액션 아이템 생성</div>', unsafe_allow_html=True)
         return
 
-    # ----- 결과: Executive Summary -----
-    exec_sum = result.get("executive_summary") or {}
-    title = exec_sum.get("title") or "전략 요약"
-    summary = exec_sum.get("summary") or ""
-    core_value = exec_sum.get("core_value") or ""
-    growth_driver = exec_sum.get("growth_driver") or ""
+    # ----- Main: State 2 Gap (Clarification Card) -----
+    if result.get("need_clarification"):
+        missing = result.get("missing", ["마감일", "담당"])
+        missing_str = ", ".join(m for m in missing)
+        st.markdown(
+            f'<div class="clarification-box">'
+            f'<p style="font-size:0.95rem;font-weight:600;color:#92400e;margin-bottom:0.5rem;">조금만 더 알려주세요</p>'
+            f'<p style="font-size:0.9rem;color:#78350f;line-height:1.5;">더 정확한 계획을 위해 <strong>{missing_str}</strong> 정보가 필요해요. 왼쪽 입력창에 보완한 뒤 다시 시도해 주세요.</p>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        return
 
-    st.markdown('<p class="section-title">Executive Summary</p>', unsafe_allow_html=True)
-    st.markdown(f"### {title}")
-    if summary:
-        st.markdown(summary)
+    # ----- Main: State 3 Dashboard -----
+    exec_sum = result.get("executive_summary") or {}
+    subject = exec_sum.get("subject") or exec_sum.get("title") or "전략 요약"
+    overview = exec_sum.get("overview") or exec_sum.get("summary") or ""
+    main_kpi = exec_sum.get("main_kpi") or exec_sum.get("core_value") or ""
+    sub_metrics = exec_sum.get("sub_metrics") or exec_sum.get("growth_driver") or ""
+
+    st.markdown('<p class="section-title">EXECUTIVE SUMMARY</p>', unsafe_allow_html=True)
+    st.markdown(f'<p style="font-size:1.1rem;font-weight:600;color:#374151;margin-bottom:0.5rem;">주제</p><p style="font-size:1rem;color:#4b5563;margin-bottom:1rem;">{subject}</p>', unsafe_allow_html=True)
+    if overview:
+        st.markdown(f'<p style="font-size:0.9rem;font-weight:600;color:#6b7280;margin-bottom:0.25rem;">개요</p><p style="font-size:0.95rem;color:#4b5563;line-height:1.6;margin-bottom:1rem;">{overview}</p>', unsafe_allow_html=True)
     ec1, ec2 = st.columns(2)
     with ec1:
-        st.markdown(f'<div class="card-box"><p class="card-label">핵심 가치</p><p class="card-value">{core_value or "-"}</p></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="card-box"><p class="card-label">핵심 목표 (KPI)</p><p class="card-value">{main_kpi or "-"}</p></div>', unsafe_allow_html=True)
     with ec2:
-        st.markdown(f'<div class="card-box"><p class="card-label">성장 동력</p><p class="card-value">{growth_driver or "-"}</p></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="card-box"><p class="card-label">하위 성과 지표</p><p class="card-value">{sub_metrics or "-"}</p></div>', unsafe_allow_html=True)
 
-    # ----- Logic Tree (Mermaid) -----
     st.markdown("---")
-    st.markdown('<p class="section-title">Logic Tree</p>', unsafe_allow_html=True)
-    st.markdown("전략적 사고의 구조적 가시화")
+    st.markdown('<p class="section-title">LOGIC TREE</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:0.85rem;color:#6b7280;margin-top:-0.25rem;">전략적 사고의 구조적 가시화</p>', unsafe_allow_html=True)
     mermaid = result.get("mermaid", "")
     if mermaid:
-        st.code(mermaid, language="mermaid")
+        from streamlit.components.v1 import html as st_html
+        from utils.helpers import render_mermaid
+        html_block = render_mermaid(mermaid)
+        if html_block:
+            st_html(html_block, height=400)
+        else:
+            st.code(mermaid, language="mermaid")
     else:
         st.info("생성된 구조가 없습니다.")
 
-    # ----- Action Plan -----
     st.markdown("---")
-    st.markdown('<p class="section-title">Action Plan</p>', unsafe_allow_html=True)
-    st.markdown("우선순위에 기반한 실행 목록")
+    st.markdown('<p class="section-title">ACTION PLAN</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:0.85rem;color:#6b7280;margin-top:-0.25rem;">우선순위에 기반한 실행 목록</p>', unsafe_allow_html=True)
     actions = result.get("actions", [])
     if actions:
-        # 컬럼 순서: summary, due_date, priority, assignee (리스트 그대로 표시)
-        st.dataframe(actions, use_container_width=True, hide_index=True)
+        display_rows = []
+        for a in actions:
+            summary = a.get("summary") or "(제목 없음)"
+            level = a.get("level", 1)
+            task_name = f"  └─ {summary}" if level == 2 else summary
+            due = a.get("due_date")
+            due_str = str(due)[:10] if due else "-"
+            dep = a.get("dependency") or "-"
+            sug = a.get("ai_suggestion")
+            ai_suggestion = f"💡 {sug}" if sug else "-"
+            display_rows.append({
+                "Task Name": task_name,
+                "Due Date": due_str,
+                "Priority": a.get("priority") or "Medium",
+                "Dependency": dep,
+                "AI Suggestion": ai_suggestion,
+            })
+        st.dataframe(display_rows, use_container_width=True, hide_index=True)
         ics_bytes = result.get("_ics_bytes") or b""
         if ics_bytes:
             st.download_button(
-                label="📅 캘린더(.ics) 다운로드",
+                label="캘린더 (.ics) 다운로드",
                 data=ics_bytes,
                 file_name="thinkflow_actions.ics",
                 mime="text/calendar",
@@ -224,10 +284,9 @@ def main():
     else:
         st.info("추출된 액션이 없습니다.")
 
-    # ----- Gantt Timeline (간단 버전: 액션별 due_date 기준) -----
     st.markdown("---")
-    st.markdown('<p class="section-title">Gantt Timeline</p>', unsafe_allow_html=True)
-    st.markdown("단계별 마일스톤 및 일정 로드맵")
+    st.markdown('<p class="section-title">TIMELINE</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:0.85rem;color:#6b7280;margin-top:-0.25rem;">단계별 마일스톤 및 일정 로드맵</p>', unsafe_allow_html=True)
     if actions:
         month_actions: dict[str, list[str]] = {}
         for a in actions:
@@ -255,13 +314,55 @@ def main():
                     return (0, 0)
             months_sorted = sorted(month_actions.keys(), key=_month_key)
             for month in months_sorted:
-                with st.expander(f"📅 {month}", expanded=True):
+                with st.expander(month, expanded=True):
                     for t in month_actions[month]:
                         st.markdown(f"- {t}")
         else:
             st.caption("due_date가 있는 액션이 없어 타임라인을 표시할 수 없습니다.")
     else:
         st.caption("액션이 없습니다.")
+
+    # ----- Context Accumulation: 찰떡이에게 수정 요청 (대시보드 하단) -----
+    st.markdown("---")
+    with st.expander("찰떡이에게 수정 요청하기 (열기/닫기)", expanded=False):
+        st.caption("계획을 다듬고 싶다면 요청을 적어 보내세요. 이전 계획과 함께 반영해 다시 생성합니다.")
+        chat_col1, chat_col2 = st.columns([4, 1])
+        with chat_col1:
+            chat_input = st.text_input(
+                "수정 요청",
+                key="refine_chat_input",
+                label_visibility="collapsed",
+                placeholder="예: 마감일을 2월 20일로 변경해 주세요",
+            )
+        with chat_col2:
+            chat_sent = st.button("보내기", type="primary")
+        if chat_sent and (chat_input or "").strip():
+            prev_plan = ""
+            if result and not result.get("need_clarification"):
+                exec_s = result.get("executive_summary") or {}
+                prev_plan = f"[이전 계획]\n주제: {exec_s.get('subject', '')}\n개요: {exec_s.get('overview', '')}\n"
+                for i, a in enumerate(result.get("actions", [])[:10], 1):
+                    prev_plan += f"{i}. {a.get('summary', '')} (마감: {a.get('due_date', '-')})\n"
+            combined = (st.session_state.last_context or "").strip()
+            if prev_plan:
+                combined += "\n\n" + prev_plan
+            combined += "\n\n[사용자 수정 요청]\n" + chat_input.strip()
+            if combined.strip():
+                with st.spinner("수정 요청을 반영해 다시 생성 중..."):
+                    try:
+                        from core.agent import ThinkFlowAgent
+                        from utils.helpers import generate_ics
+                        agent = ThinkFlowAgent()
+                        new_result = agent.analyze(combined)
+                        if new_result.get("need_clarification"):
+                            st.session_state.thinkflow_result = new_result
+                        else:
+                            new_result["_ics_bytes"] = generate_ics(new_result.get("actions", []))
+                            st.session_state.thinkflow_result = new_result
+                            st.session_state.last_context = combined
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"오류: {e}")
 
 
 if __name__ == "__main__":
