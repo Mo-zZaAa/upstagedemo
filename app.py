@@ -5,11 +5,17 @@ Context-Aware UX: Guidance Mode, Gap Analysis, Clean Design (no emojis).
 
 import logging
 import os
+import sys
 import tempfile
 from pathlib import Path
 from datetime import datetime
 
+# Ensure project root is on path (Streamlit Cloud compatibility)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import streamlit as st  # type: ignore[reportMissingImports]
+
+from utils.helpers import format_dday
 
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
@@ -286,7 +292,6 @@ def main():
         return
 
     # ----- Main: State 3 Dashboard -----
-    from utils.helpers import format_dday
     exec_sum = result.get("executive_summary") or {}
     subject = exec_sum.get("subject") or exec_sum.get("title") or "전략 요약"
     overview = exec_sum.get("overview") or exec_sum.get("summary") or ""
