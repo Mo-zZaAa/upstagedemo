@@ -16,6 +16,7 @@ from utils.prompts import (
     ACTION_PROMPT,
     EXECUTIVE_SUMMARY_PROMPT,
     GAP_ANALYSIS_PROMPT,
+    STRATEGIC_COMMENTS_PROMPT,
 )
 from utils.helpers import clean_mermaid
 
@@ -49,6 +50,12 @@ class ThinkFlowAgent:
         self._gap_chain = (
             {"context": RunnablePassthrough()}
             | GAP_ANALYSIS_PROMPT
+            | self.llm
+            | StrOutputParser()
+        )
+        self._strategic_chain = (
+            {"context": RunnablePassthrough(), "actions_summary": RunnablePassthrough()}
+            | STRATEGIC_COMMENTS_PROMPT
             | self.llm
             | StrOutputParser()
         )
@@ -125,10 +132,22 @@ class ThinkFlowAgent:
             action_raw = "[]"
         actions = self._parse_actions(action_raw)
 
+        actions_summary = "\n".join(f"- {a.get('summary', '')} (마감: {a.get('due_date', '-')})" for a in actions[:15])
+        strategic_comments = {}
+        try:
+            strat_raw = self._strategic_chain.invoke({
+                "context": context.strip(),
+                "actions_summary": actions_summary,
+            })
+            strategic_comments = self._parse_strategic_comments(strat_raw)
+        except Exception:
+            pass
+
         return {
             "mermaid": mermaid_out,
             "actions": actions,
             "executive_summary": executive_summary,
+            "strategic_comments": strategic_comments,
         }
 
     def _parse_executive_summary(self, raw: str) -> dict[str, Any]:
@@ -161,6 +180,31 @@ class ThinkFlowAgent:
             return cleaned
         return raw.strip() if raw else cleaned
 
+    def _parse_strategic_comments(self, raw: str) -> dict[str, Any]:
+        """Parse strategic comments JSON. Returns {must_finish_by, prioritize, can_skip}."""
+        if not raw or not raw.strip():
+            return {}
+        text = raw.strip()
+        code_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+        if code_match:
+            text = code_match.group(1).strip()
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        out: dict[str, list[str]] = {}
+        for key in ("must_finish_by", "prioritize", "can_skip"):
+            val = data.get(key)
+            if isinstance(val, list):
+                out[key] = [str(x).strip() for x in val if str(x).strip()]
+            elif isinstance(val, str) and val.strip():
+                out[key] = [val.strip()]
+            else:
+                out[key] = []
+        return out
+
     def _parse_actions(self, raw: str) -> list[dict[str, Any]]:
         """Parse JSON array from LLM output. Return empty list on failure."""
         if not raw or not raw.strip():
@@ -189,6 +233,9 @@ class ThinkFlowAgent:
             level = 1 if level not in (1, 2) else level
             dep = str(item.get("dependency", "")).strip() or ""
             suggestion = str(item.get("ai_suggestion", "")).strip() or ""
+            conditions = str(item.get("conditions", "")).strip() or ""
+            estimated_time = str(item.get("estimated_time", "")).strip() or ""
+            is_optional = bool(item.get("is_optional", False))
             out.append({
                 "summary": str(item.get("summary", "")).strip() or "(제목 없음)",
                 "due_date": item.get("due_date"),
@@ -196,5 +243,8 @@ class ThinkFlowAgent:
                 "level": level,
                 "dependency": dep,
                 "ai_suggestion": suggestion,
+                "conditions": conditions,
+                "estimated_time": estimated_time,
+                "is_optional": is_optional,
             })
         return out

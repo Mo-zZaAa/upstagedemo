@@ -2,75 +2,103 @@
 Helpers: ICS calendar generation, Mermaid diagram cleaning, Live Mermaid renderer.
 """
 
-import json
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from ics import Calendar, Event
 
 
-MERMAID_HTML_TEMPLATE = """
-<div class="mermaid-container" style="background:#fff;border-radius:12px;padding:1.5rem;border:1px solid #eaeaea;">
-  <div class="mermaid-diagram" id="mermaid-target"></div>
+def format_dday(due: str | datetime | None) -> str:
+    """Format due date as D-day (D-5, D+3, D-day)."""
+    if not due:
+        return "-"
+    try:
+        if isinstance(due, datetime):
+            target = due.date()
+        else:
+            target = datetime.strptime(str(due).strip()[:10], "%Y-%m-%d").date()
+        today = date.today()
+        delta = (target - today).days
+        if delta == 0:
+            return "D-day"
+        if delta > 0:
+            return f"D-{delta}"
+        return f"D+{abs(delta)}"
+    except (ValueError, TypeError):
+        return str(due)[:10] if due else "-"
+
+
+def _mermaid_html(code: str, height: int = 500) -> str:
+    """
+    Simple Mermaid HTML: div.mermaid + startOnLoad for reliable rendering.
+    Lighter theme for readability; container scrolls when long.
+    """
+    # Prevent script injection; Mermaid code rarely has </script>
+    safe = code.strip().replace("</script>", "</scr\"+\"ipt>")
+    return f"""
+<div class="mermaid" style="min-height: {height}px; max-height: 800px; overflow: auto; background:#fafafa; border-radius:12px; padding:1.5rem; border:1px solid #eaeaea;">
+{safe}
 </div>
-<script type="application/json" id="mermaid-src">{code_json}</script>
 <script type="module">
-  const src = document.getElementById('mermaid-src');
-  const target = document.getElementById('mermaid-target');
-  if (src && target) {
-    try {
-      const code = JSON.parse(src.textContent || '""');
-      if (!code || !code.trim()) return;
-      const mermaid = (await import('https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs')).default;
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: 'base',
-        themeVariables: {
-          primaryColor: '#8B5CF6',
-          primaryTextColor: '#374151',
-          primaryBorderColor: '#8B5CF6',
-          lineColor: '#6b7280',
-          secondaryColor: '#f3f4f6',
-          tertiaryColor: '#ffffff',
-          edgeLabelBackground: '#ffffff'
-        }
-      });
-      const { svg } = await mermaid.render('mermaid-' + Math.random().toString(36).slice(2), code.trim());
-      target.innerHTML = svg;
-    } catch (e) {
-      target.innerHTML = '<p style="color:#9ca3af;font-size:0.9rem;">다이어그램 렌더링 실패</p>';
-    }
-  }
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({{
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {{
+      primaryColor: '#c4b5fd',
+      primaryTextColor: '#4b5563',
+      primaryBorderColor: '#a78bfa',
+      lineColor: '#9ca3af',
+      secondaryColor: '#e9d5ff',
+      tertiaryColor: '#f5f3ff',
+      edgeLabelBackground: '#ffffff'
+    }}
+  }});
 </script>
 """
 
 
-def _normalize_mermaid_for_graph(code: str) -> str:
+def _sanitize_mermaid_code(code: str) -> str:
     """
-    Strip invalid characters. Prefer graph TD/LR for clear hierarchy.
-    Mindmap is passed through (Mermaid supports it).
+    Fix common Mermaid syntax errors: special chars in labels, reserved words.
     """
     if not code or not code.strip():
         return ""
     s = code.strip()
     s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", s)
-    # If no diagram type, default to graph TD
-    if not re.search(r"^\s*(graph|mindmap|flowchart)\s+", s, re.IGNORECASE):
+
+    def fix_label(match: re.Match) -> str:
+        inner = match.group(1)
+        inner = inner.replace('"', "'").replace(":", "-").replace(";", ",")
+        inner = re.sub(r"[\[\]{}()]", " ", inner)
+        inner = re.sub(r"\s+", " ", inner).strip()
+        if inner.lower() == "end":
+            inner = "End"
+        return f"[{inner}]" if inner else "[Node]"
+
+    s = re.sub(r"\[([^\]]*)\]", fix_label, s)
+    s = re.sub(r"\(([^)]*)\)", lambda m: f"({m.group(1).replace('"', "'")})", s)
+    if not re.search(r"^\s*(graph|flowchart)\s+", s, re.I):
         s = "graph TD\n" + s
     return s
 
 
-def render_mermaid(code: str) -> str:
+def _normalize_mermaid_for_graph(code: str) -> str:
+    """Clean and sanitize Mermaid code for reliable rendering."""
+    cleaned = clean_mermaid(code or "")
+    return _sanitize_mermaid_code(cleaned)
+
+
+def render_mermaid(code: str, height: int = 500) -> str:
     """
     Produce HTML block with Mermaid.js (CDN) to render the diagram.
-    Cleans code to use graph TD/LR, strips invalid chars, applies purple theme.
+    Uses div.mermaid + startOnLoad for reliable display. Fallback: empty string.
     """
     cleaned = _normalize_mermaid_for_graph(clean_mermaid(code or ""))
     if not cleaned.strip():
         return ""
-    code_json = json.dumps(cleaned)
-    return MERMAID_HTML_TEMPLATE.replace("{code_json}", code_json)
+    return _mermaid_html(cleaned, height=height)
 
 
 def clean_mermaid(text: str) -> str:

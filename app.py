@@ -31,6 +31,46 @@ def check_api_key() -> bool:
     return bool(os.environ.get("UPSTAGE_API_KEY", "").strip())
 
 
+def _clean_display_text(s: str) -> str:
+    """Strip markdown/LLM artifacts (e.g. **) from displayed text."""
+    if not s or not isinstance(s, str):
+        return s or ""
+    return s.replace("**", "").strip()
+
+
+def _run_refinement(result: dict | None, user_input: str) -> None:
+    """Accumulate context and regenerate plan with ThinkFlow AI."""
+    if not result or not user_input.strip():
+        return
+    prev_plan = ""
+    if not result.get("need_clarification"):
+        exec_s = result.get("executive_summary") or {}
+        prev_plan = f"[이전 계획]\n주제: {exec_s.get('subject', '')}\n개요: {exec_s.get('overview', '')}\n"
+        for i, a in enumerate(result.get("actions", [])[:10], 1):
+            prev_plan += f"{i}. {a.get('summary', '')} (마감: {a.get('due_date', '-')})\n"
+    combined = (st.session_state.last_context or "").strip()
+    if prev_plan:
+        combined += "\n\n" + prev_plan
+    combined += "\n\n[사용자 수정 요청]\n" + user_input.strip()
+    if not combined.strip():
+        return
+    with st.spinner("수정 요청을 반영해 다시 생성 중..."):
+        try:
+            from core.agent import ThinkFlowAgent
+            from utils.helpers import generate_ics
+            agent = ThinkFlowAgent()
+            new_result = agent.analyze(combined)
+            if new_result.get("need_clarification"):
+                st.session_state.thinkflow_result = new_result
+            else:
+                new_result["_ics_bytes"] = generate_ics(new_result.get("actions", []))
+                st.session_state.thinkflow_result = new_result
+                st.session_state.last_context = combined
+            st.rerun()
+        except Exception as e:
+            st.error(f"오류: {e}")
+
+
 # ---- Clean design: mild colors, no emojis ----
 STYLES = """
 <style>
@@ -74,6 +114,20 @@ STYLES = """
   .refine-box { background: #f9fafb; border: 1px solid #eaeaea; border-radius: 12px; padding: 1rem 1.25rem; margin-top: 1rem; }
   .refine-label { font-size: 0.8rem; color: #6b7280; margin-bottom: 0.5rem; }
   div[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  .action-row { background: #fff; border-radius: 10px; padding: 0.9rem 1rem; margin-bottom: 0.5rem; border: 1px solid #eaeaea; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  .action-row-sub { margin-left: 1.5rem; border-left: 3px solid #8b7aa8; }
+  .dep-tag { font-size: 0.7rem; color: #4b5563; background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
+  .dep-tag-label { font-size: 0.65rem; color: #9ca3af; margin-right: 2px; }
+  .priority-badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 6px; }
+  .priority-High { background: #fef2f2; color: #b91c1c; }
+  .priority-Medium { background: #fef9c3; color: #854d0e; }
+  .priority-Low { background: #f0fdf4; color: #166534; }
+  .floating-chat { position: fixed; bottom: 20px; right: 20px; z-index: 999; background: white; padding: 12px 16px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); width: 320px; border: 1px solid #eaeaea; }
+  .timeline-item { padding: 0.6rem 0.9rem; margin-bottom: 0.4rem; border-radius: 8px; border: 1px solid #eaeaea; background: #fff; }
+  .timeline-item-optional { border-style: dashed; opacity: 0.85; background: #fafafa; }
+  .timeline-badge { font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; margin-right: 6px; }
+  .timeline-essential { background: #dbeafe; color: #1e40af; }
+  .timeline-optional { background: #f3f4f6; color: #6b7280; }
 </style>
 """
 
@@ -103,6 +157,8 @@ def main():
         st.session_state.thought_dump = ""
     if "last_context" not in st.session_state:
         st.session_state.last_context = ""
+    if "suggestion_pending" not in st.session_state:
+        st.session_state.suggestion_pending = None
 
     # ----- Sidebar: Logo, Dumping Zone, File Upload -----
     with st.sidebar:
@@ -142,6 +198,17 @@ def main():
                 st.session_state.thinkflow_result = None
                 st.session_state.last_context = ""
                 st.rerun()
+            st.markdown("---")
+            st.markdown('<p style="font-size:0.85rem;font-weight:600;color:#4b5563;margin-bottom:0.35rem;">ThinkFlow에게 수정 요청</p>', unsafe_allow_html=True)
+            st.caption("계획을 다듬고 싶다면 요청을 적어 보내세요.")
+            sidebar_chat = st.text_input(
+                "수정 요청",
+                key="refine_chat_input",
+                label_visibility="collapsed",
+                placeholder="예: 마감일을 2월 20일로 변경해 주세요",
+            )
+            if st.button("보내기", key="sidebar_send", use_container_width=True) and (sidebar_chat or "").strip():
+                _run_refinement(st.session_state.thinkflow_result, sidebar_chat.strip())
 
         st.markdown('<p class="footer-text">Powered by Upstage</p>', unsafe_allow_html=True)
 
@@ -219,6 +286,7 @@ def main():
         return
 
     # ----- Main: State 3 Dashboard -----
+    from utils.helpers import format_dday
     exec_sum = result.get("executive_summary") or {}
     subject = exec_sum.get("subject") or exec_sum.get("title") or "전략 요약"
     overview = exec_sum.get("overview") or exec_sum.get("summary") or ""
@@ -240,11 +308,13 @@ def main():
     st.markdown('<p style="font-size:0.85rem;color:#6b7280;margin-top:-0.25rem;">전략적 사고의 구조적 가시화</p>', unsafe_allow_html=True)
     mermaid = result.get("mermaid", "")
     if mermaid:
-        from streamlit.components.v1 import html as st_html
+        import streamlit.components.v1 as components  # type: ignore[reportMissingImports]
         from utils.helpers import render_mermaid
-        html_block = render_mermaid(mermaid)
+        html_block = render_mermaid(mermaid, height=500)
         if html_block:
-            st_html(html_block, height=400)
+            components.html(html_block, height=600, scrolling=True)
+            with st.expander("Logic Tree 코드 보기", expanded=False):
+                st.code(mermaid, language="mermaid")
         else:
             st.code(mermaid, language="mermaid")
     else:
@@ -252,118 +322,173 @@ def main():
 
     st.markdown("---")
     st.markdown('<p class="section-title">ACTION PLAN</p>', unsafe_allow_html=True)
-    st.markdown('<p style="font-size:0.85rem;color:#6b7280;margin-top:-0.25rem;">우선순위에 기반한 실행 목록</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:0.85rem;color:#6b7280;margin-top:-0.25rem;">우선순위에 기반한 실행 목록 · <span style="color:#8b7aa8;">이런 것도 필요하신가요?</span> 아래 제안은 이 액션 전후로 할 만한 일을 추천합니다.</p>', unsafe_allow_html=True)
     actions = result.get("actions", [])
-    if actions:
-        display_rows = []
-        for a in actions:
-            summary = a.get("summary") or "(제목 없음)"
+    if not actions:
+        st.info("추출된 액션이 없습니다. 왼쪽에서 생각을 입력한 뒤 다시 시도해 보세요.")
+    else:
+        # Suggestion confirmation flow
+        pending = st.session_state.suggestion_pending
+        if pending is not None:
+            with st.expander("이 제안을 일정에 추가할까요?", expanded=True):
+                st.caption(f"추가할 항목: {_clean_display_text(pending.get('suggestion', ''))}")
+                position_options = ["맨 뒤에 추가"]
+                for idx, a in enumerate(actions):
+                    name = _clean_display_text(a.get("summary") or "(제목 없음)")[:20]
+                    position_options.append(f"{idx + 1}번 '{name}' 앞에")
+                    position_options.append(f"{idx + 1}번 '{name}' 뒤에")
+                insert_at = st.selectbox(
+                    "어디에 추가할까요?",
+                    options=position_options,
+                    key="sugg_position",
+                )
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("예, 추가", key="sugg_confirm"):
+                        new_item = {
+                            "summary": pending.get("suggestion", ""),
+                            "due_date": None,
+                            "priority": "Medium",
+                            "level": 2,
+                            "dependency": "",
+                            "ai_suggestion": "",
+                            "conditions": "",
+                            "estimated_time": "",
+                            "is_optional": False,
+                        }
+                        if insert_at == "맨 뒤에 추가":
+                            actions.append(new_item)
+                        else:
+                            sel_idx = position_options.index(insert_at)
+                            pair = (sel_idx - 1) // 2
+                            before = "앞에" in insert_at
+                            insert_idx = pair if before else pair + 1
+                            actions.insert(insert_idx, new_item)
+                        result["actions"] = actions
+                        from utils.helpers import generate_ics
+                        result["_ics_bytes"] = generate_ics(actions)
+                        st.session_state.suggestion_pending = None
+                        st.toast("실행 계획에 추가되었습니다.")
+                        st.rerun()
+                with c2:
+                    if st.button("취소", key="sugg_cancel"):
+                        st.session_state.suggestion_pending = None
+                        st.rerun()
+
+        hc1, hc2, hc3 = st.columns([5, 2, 3])
+        with hc1:
+            st.caption("태스크 · 선행")
+        with hc2:
+            st.caption("마감 · D-day · 우선순위")
+        with hc3:
+            st.caption("액션 전후 제안")
+        for i, a in enumerate(actions):
+            summary = _clean_display_text(a.get("summary") or "(제목 없음)")
             level = a.get("level", 1)
-            task_name = f"  └─ {summary}" if level == 2 else summary
+            dep = _clean_display_text(a.get("dependency") or "")
             due = a.get("due_date")
             due_str = str(due)[:10] if due else "-"
-            dep = a.get("dependency") or "-"
-            sug = a.get("ai_suggestion")
-            ai_suggestion = f"💡 {sug}" if sug else "-"
-            display_rows.append({
-                "Task Name": task_name,
-                "Due Date": due_str,
-                "Priority": a.get("priority") or "Medium",
-                "Dependency": dep,
-                "AI Suggestion": ai_suggestion,
-            })
-        st.dataframe(display_rows, use_container_width=True, hide_index=True)
+            prio = a.get("priority") or "Medium"
+            sug = _clean_display_text(a.get("ai_suggestion") or "")
+            task_display = f"  └─ {summary}" if level == 2 else summary
+            with st.container():
+                col1, col2, col3 = st.columns([5, 2, 3])
+                with col1:
+                    dep_part = f' <span class="dep-tag"><span class="dep-tag-label">선행</span>{dep}</span>' if dep else ""
+                    st.markdown(f"**{task_display}**{dep_part}", unsafe_allow_html=True)
+                with col2:
+                    dday_str = format_dday(due)
+                    st.markdown(f"{due_str} ({dday_str}) | <span class=\"priority-badge priority-{prio}\">{prio}</span>", unsafe_allow_html=True)
+                with col3:
+                    if sug:
+                        btn_label = f"💡 {sug[:22]}{'...' if len(sug) > 22 else ''}"
+                        if st.button(btn_label, key=f"sugg_{i}"):
+                            st.session_state.suggestion_pending = {"suggestion": sug, "from_index": i}
+                            st.rerun()
+                    else:
+                        st.caption("-")
         ics_bytes = result.get("_ics_bytes") or b""
         if ics_bytes:
             st.download_button(
-                label="캘린더 (.ics) 다운로드",
+                label="📅 캘린더 (.ics) 다운로드",
                 data=ics_bytes,
                 file_name="thinkflow_actions.ics",
                 mime="text/calendar",
             )
-    else:
-        st.info("추출된 액션이 없습니다.")
 
     st.markdown("---")
     st.markdown('<p class="section-title">TIMELINE</p>', unsafe_allow_html=True)
     st.markdown('<p style="font-size:0.85rem;color:#6b7280;margin-top:-0.25rem;">단계별 마일스톤 및 일정 로드맵</p>', unsafe_allow_html=True)
-    if actions:
-        month_actions: dict[str, list[str]] = {}
+    if not actions:
+        st.caption("액션이 없습니다.")
+    else:
+        month_items: dict[str, list[dict]] = {}
         for a in actions:
             d = a.get("due_date")
-            if not d:
-                continue
-            try:
-                if isinstance(d, datetime):
-                    month_key = d.strftime("%Y년 %m월")
-                else:
-                    dt = datetime.strptime(str(d).strip()[:10], "%Y-%m-%d")
-                    month_key = dt.strftime("%Y년 %m월")
-            except (ValueError, TypeError):
-                continue
-            summary_text = (a.get("summary") or "(제목 없음)")[:40]
-            if month_key not in month_actions:
-                month_actions[month_key] = []
-            month_actions[month_key].append(summary_text)
-        if month_actions:
-            def _month_key(m: str) -> tuple[int, int]:
+            month_key = "기한 없음"
+            if d:
                 try:
-                    a, b = m.split("년 ", 1)
-                    return (int(a.strip()), int(b.replace("월", "").strip() or 0))
-                except (ValueError, AttributeError):
-                    return (0, 0)
-            months_sorted = sorted(month_actions.keys(), key=_month_key)
-            for month in months_sorted:
-                with st.expander(month, expanded=True):
-                    for t in month_actions[month]:
-                        st.markdown(f"- {t}")
-        else:
-            st.caption("due_date가 있는 액션이 없어 타임라인을 표시할 수 없습니다.")
-    else:
-        st.caption("액션이 없습니다.")
+                    if isinstance(d, datetime):
+                        month_key = d.strftime("%Y년 %m월")
+                    else:
+                        dt = datetime.strptime(str(d).strip()[:10], "%Y-%m-%d")
+                        month_key = dt.strftime("%Y년 %m월")
+                except (ValueError, TypeError):
+                    pass
+            if month_key not in month_items:
+                month_items[month_key] = []
+            month_items[month_key].append(a)
+        def _month_key(m: str) -> tuple[int, int]:
+            if m == "기한 없음":
+                return (9999, 99)
+            try:
+                a, b = m.split("년 ", 1)
+                return (int(a.strip()), int(b.replace("월", "").strip() or 0))
+            except (ValueError, AttributeError):
+                return (0, 0)
+        months_sorted = sorted(month_items.keys(), key=_month_key)
+        for month in months_sorted:
+            with st.expander(month, expanded=True):
+                for a in month_items[month]:
+                    summary = _clean_display_text(a.get("summary") or "(제목 없음)")
+                    cond = a.get("conditions") or ""
+                    est = a.get("estimated_time") or ""
+                    opt = a.get("is_optional", False)
+                    due = a.get("due_date")
+                    dday = format_dday(due) if due else ""
+                    badge = "Optional" if opt else "Essential"
+                    item_class = "timeline-item timeline-item-optional" if opt else "timeline-item"
+                    cond_part = f' <span style="font-size:0.75rem;color:#6b7280;">⚠️ 조건: {cond}</span>' if cond else ""
+                    est_part = f' <span style="font-size:0.75rem;color:#6b7280;">⏱ {est}</span>' if est else ""
+                    dday_part = f' <span style="font-size:0.75rem;font-weight:600;color:#8b7aa8;">{dday}</span>' if dday and dday != "-" else ""
+                    badge_class = "timeline-badge timeline-optional" if opt else "timeline-badge timeline-essential"
+                    st.markdown(
+                        f'<div class="{item_class}"><span class="{badge_class}">{badge}</span>{summary}{dday_part}{est_part}{cond_part}</div>',
+                        unsafe_allow_html=True,
+                    )
 
-    # ----- Context Accumulation: 찰떡이에게 수정 요청 (대시보드 하단) -----
-    st.markdown("---")
-    with st.expander("찰떡이에게 수정 요청하기 (열기/닫기)", expanded=False):
-        st.caption("계획을 다듬고 싶다면 요청을 적어 보내세요. 이전 계획과 함께 반영해 다시 생성합니다.")
-        chat_col1, chat_col2 = st.columns([4, 1])
-        with chat_col1:
-            chat_input = st.text_input(
-                "수정 요청",
-                key="refine_chat_input",
-                label_visibility="collapsed",
-                placeholder="예: 마감일을 2월 20일로 변경해 주세요",
-            )
-        with chat_col2:
-            chat_sent = st.button("보내기", type="primary")
-        if chat_sent and (chat_input or "").strip():
-            prev_plan = ""
-            if result and not result.get("need_clarification"):
-                exec_s = result.get("executive_summary") or {}
-                prev_plan = f"[이전 계획]\n주제: {exec_s.get('subject', '')}\n개요: {exec_s.get('overview', '')}\n"
-                for i, a in enumerate(result.get("actions", [])[:10], 1):
-                    prev_plan += f"{i}. {a.get('summary', '')} (마감: {a.get('due_date', '-')})\n"
-            combined = (st.session_state.last_context or "").strip()
-            if prev_plan:
-                combined += "\n\n" + prev_plan
-            combined += "\n\n[사용자 수정 요청]\n" + chat_input.strip()
-            if combined.strip():
-                with st.spinner("수정 요청을 반영해 다시 생성 중..."):
-                    try:
-                        from core.agent import ThinkFlowAgent
-                        from utils.helpers import generate_ics
-                        agent = ThinkFlowAgent()
-                        new_result = agent.analyze(combined)
-                        if new_result.get("need_clarification"):
-                            st.session_state.thinkflow_result = new_result
-                        else:
-                            new_result["_ics_bytes"] = generate_ics(new_result.get("actions", []))
-                            st.session_state.thinkflow_result = new_result
-                            st.session_state.last_context = combined
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"오류: {e}")
-
+    # ----- Strategic Comments -----
+    strat = result.get("strategic_comments") or {}
+    if strat and (strat.get("must_finish_by") or strat.get("prioritize") or strat.get("can_skip")):
+        st.markdown("---")
+        st.markdown('<p class="section-title">전략적 코멘트</p>', unsafe_allow_html=True)
+        st.markdown('<p style="font-size:0.85rem;color:#6b7280;margin-top:-0.25rem;">실행 시 유의할 점</p>', unsafe_allow_html=True)
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            items = strat.get("must_finish_by", [])
+            if items:
+                body = "".join(f"<li>{_clean_display_text(x)}</li>" for x in items)
+                st.markdown(f'<div class="card-box"><p class="card-label">꼭 언제까지</p><ul style="margin:0;padding-left:1.2rem;">{body}</ul></div>', unsafe_allow_html=True)
+        with sc2:
+            items = strat.get("prioritize", [])
+            if items:
+                body = "".join(f"<li>{_clean_display_text(x)}</li>" for x in items)
+                st.markdown(f'<div class="card-box"><p class="card-label">빨리 진행할 것</p><ul style="margin:0;padding-left:1.2rem;">{body}</ul></div>', unsafe_allow_html=True)
+        with sc3:
+            items = strat.get("can_skip", [])
+            if items:
+                body = "".join(f"<li>{_clean_display_text(x)}</li>" for x in items)
+                st.markdown(f'<div class="card-box"><p class="card-label">생략 가능·리소스 아끼기</p><ul style="margin:0;padding-left:1.2rem;">{body}</ul></div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
